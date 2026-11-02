@@ -1,0 +1,6 @@
+{
+  "summary": "Root cause analysis and architectural fix plan for the Gemini Audio WebSocket and quota exhaustion errors, including unary TTS circuit-breaker caching, single reused WebSocket sessions per voice, chunked synthesis progress, and disabling Vite HMR WebSockets.",
+  "updatedAt": "2026-11-02T22:28:41.800946640Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

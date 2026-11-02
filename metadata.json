@@ -1,0 +1,6 @@
+{
+  "name": "VoxCast Multi-Character TTS Studio",
+  "description": "Multi-character script-to-MP3 production studio powered by Gemini TTS with custom character voice casting, vocal direction, and direct MP3 export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

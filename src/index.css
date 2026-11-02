@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Figtree', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-logo: 'Syne', 'Figtree', sans-serif;
+    --font-dot: 'DotGothic16', monospace;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #F7F5EE;
+    color: #111110;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+.font-figtree {
+  font-family: var(--font-sans);
+}
+
+.font-logo {
+  font-family: var(--font-logo);
+}
+
+.font-dot {
+  font-family: var(--font-dot);
+  letter-spacing: 0.06em;
+}
+
+.font-mono-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.dot-surface {
+  background-image: radial-gradient(rgba(17, 17, 16, 0.14) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.dot-divider {
+  background-image: radial-gradient(circle, rgba(17, 17, 16, 0.35) 1.25px, transparent 1.25px);
+  background-size: 8px 4px;
+  background-repeat: repeat-x;
+  height: 4px;
+}
