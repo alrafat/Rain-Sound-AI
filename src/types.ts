@@ -3,20 +3,21 @@ export type VoiceGender = 'male' | 'female';
 export type TalkingMode = 'single' | 'dual' | 'multi';
 
 export type VoiceCharacterId =
-  | 'Akid'
-  | 'Remy'
+  | 'Achird'
   | 'Charon'
   | 'Fenrir'
   | 'Puck'
+  | 'Orus'
+  | 'Autonoe'
   | 'Zephyr'
-  | 'Fola'
   | 'Kore'
-  | 'Aria'
-  | 'Sora';
+  | 'Aoede'
+  | 'Leda';
 
 export interface VoiceCharacterOption {
   id: VoiceCharacterId;
   name: VoiceCharacterId;
+  geminiVoiceName: VoiceCharacterId;
   gender: VoiceGender;
   tag: string;
   description: string;

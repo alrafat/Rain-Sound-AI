@@ -1,6 +1,6 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Modality, Type } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import ffmpegPath from 'ffmpeg-static';
 import { spawn } from 'child_process';
 import path from 'path';
@@ -24,7 +24,17 @@ function getGeminiClient() {
   });
 }
 
-type PrebuiltBaseVoice = 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr';
+type PrebuiltBaseVoice =
+  | 'Achird'
+  | 'Charon'
+  | 'Fenrir'
+  | 'Puck'
+  | 'Orus'
+  | 'Autonoe'
+  | 'Zephyr'
+  | 'Kore'
+  | 'Aoede'
+  | 'Leda';
 
 interface VoiceMappingSpec {
   gender: 'male' | 'female';
@@ -34,20 +44,13 @@ interface VoiceMappingSpec {
 }
 
 const VOICE_CHARACTER_MAP: Record<string, VoiceMappingSpec> = {
-  // MALE VOICES
-  Akid: {
+  // REAL GEMINI MALE VOICES (Default for Raf: Achird)
+  Achird: {
     gender: 'male',
-    primaryBase: 'Charon',
-    alternateBase: 'Fenrir',
-    personaPrompt:
-      'Grounded, resonant, natural male baritone voice with warm emotional depth and calm confidence',
-  },
-  Remy: {
-    gender: 'male',
-    primaryBase: 'Puck',
+    primaryBase: 'Achird',
     alternateBase: 'Charon',
     personaPrompt:
-      'Intimate, conversational, natural male tenor voice with close-mic warmth and expressive nuance',
+      'Grounded, resonant, natural male voice with warm emotional depth and calm confidence',
   },
   Charon: {
     gender: 'male',
@@ -66,12 +69,26 @@ const VOICE_CHARACTER_MAP: Record<string, VoiceMappingSpec> = {
   Puck: {
     gender: 'male',
     primaryBase: 'Puck',
-    alternateBase: 'Charon',
+    alternateBase: 'Orus',
     personaPrompt:
       'Bright, energetic, expressive male tenor voice with lively natural inflection',
   },
+  Orus: {
+    gender: 'male',
+    primaryBase: 'Orus',
+    alternateBase: 'Achird',
+    personaPrompt:
+      'Steady, resonant, articulate male voice with natural storytelling warmth',
+  },
 
-  // FEMALE VOICES
+  // REAL GEMINI FEMALE VOICES (Default for Rain: Autonoe)
+  Autonoe: {
+    gender: 'female',
+    primaryBase: 'Autonoe',
+    alternateBase: 'Zephyr',
+    personaPrompt:
+      'Warm, soulful, deeply expressive female voice with rich emotional nuance',
+  },
   Zephyr: {
     gender: 'female',
     primaryBase: 'Zephyr',
@@ -79,59 +96,67 @@ const VOICE_CHARACTER_MAP: Record<string, VoiceMappingSpec> = {
     personaPrompt:
       'Smooth, airy, gentle female voice with effortless natural pacing and emotional warmth',
   },
-  Fola: {
-    gender: 'female',
-    primaryBase: 'Kore',
-    alternateBase: 'Zephyr',
-    personaPrompt:
-      'Warm, soulful, deeply expressive female storytelling voice with rich emotional resonance',
-  },
   Kore: {
     gender: 'female',
     primaryBase: 'Kore',
-    alternateBase: 'Zephyr',
+    alternateBase: 'Autonoe',
     personaPrompt:
       'Poised, clear, articulate female mezzo voice with natural studio warmth',
   },
-  Aria: {
+  Aoede: {
     gender: 'female',
-    primaryBase: 'Zephyr',
-    alternateBase: 'Kore',
+    primaryBase: 'Aoede',
+    alternateBase: 'Zephyr',
     personaPrompt:
       'Soft, intimate, delicate close-mic female voice with gentle breath and tender emotion',
   },
+  Leda: {
+    gender: 'female',
+    primaryBase: 'Leda',
+    alternateBase: 'Kore',
+    personaPrompt:
+      'Bright, lively, expressive female voice with warm, vibrant energy',
+  },
+
+  // Legacy alias compatibility mapping to real Gemini voices
+  Akid: {
+    gender: 'male',
+    primaryBase: 'Achird',
+    alternateBase: 'Charon',
+    personaPrompt:
+      'Grounded, resonant, natural male voice with warm emotional depth and calm confidence',
+  },
+  Remy: {
+    gender: 'male',
+    primaryBase: 'Puck',
+    alternateBase: 'Orus',
+    personaPrompt:
+      'Intimate, conversational, natural male tenor voice with close-mic warmth',
+  },
+  Fola: {
+    gender: 'female',
+    primaryBase: 'Autonoe',
+    alternateBase: 'Kore',
+    personaPrompt:
+      'Warm, soulful, deeply expressive female storytelling voice with rich emotional resonance',
+  },
+  Aria: {
+    gender: 'female',
+    primaryBase: 'Aoede',
+    alternateBase: 'Zephyr',
+    personaPrompt:
+      'Soft, intimate, delicate close-mic female voice with gentle breath',
+  },
   Sora: {
     gender: 'female',
-    primaryBase: 'Kore',
-    alternateBase: 'Zephyr',
+    primaryBase: 'Leda',
+    alternateBase: 'Kore',
     personaPrompt:
       'Bright, lively, expressive female voice with warm, vibrant energy',
   },
 };
 
 const auditionMp3Cache = new Map<string, string>();
-
-// Circuit-breaker memory so quota-exhausted unary TTS models are skipped immediately (0ms)
-const ttsModelCooldownUntil = new Map<string, number>();
-
-function isModelAvailable(modelName: string): boolean {
-  const until = ttsModelCooldownUntil.get(modelName);
-  if (!until) return true;
-  if (Date.now() >= until) {
-    ttsModelCooldownUntil.delete(modelName);
-    return true;
-  }
-  return false;
-}
-
-function recordModelQuotaError(modelName: string, err: any) {
-  const status = err?.status || err?.code;
-  const msg = String(err?.message || '');
-  if (status === 429 || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-    // Cooldown for 10 minutes on 429 quota exhaustion
-    ttsModelCooldownUntil.set(modelName, Date.now() + 10 * 60 * 1000);
-  }
-}
 
 function getVoiceSpec(
   voiceId?: string,
@@ -141,19 +166,43 @@ function getVoiceSpec(
     return VOICE_CHARACTER_MAP[voiceId];
   }
   return fallbackGender === 'female'
-    ? VOICE_CHARACTER_MAP.Zephyr
-    : VOICE_CHARACTER_MAP.Akid;
+    ? VOICE_CHARACTER_MAP.Autonoe
+    : VOICE_CHARACTER_MAP.Achird;
+}
+
+function isQuotaError(err: any): boolean {
+  const status = err?.status || err?.code;
+  const msg = String(err?.message || '');
+  return (
+    status === 429 ||
+    msg.includes('429') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.toLowerCase().includes('quota')
+  );
+}
+
+function createClearQuotaError(lastErr?: any): Error {
+  const rawMsg = String(lastErr?.message || '');
+  const retryMatch = rawMsg.match(/retry in ([0-9hms.]+)/i);
+  const retryHint = retryMatch ? ` (Retry available in ${retryMatch[1]})` : '';
+  const error: any = new Error(
+    `Gemini TTS quota limit reached (429 RESOURCE_EXHAUSTED)${retryHint}. Audio synthesis stopped instead of switching models—please wait for quota reset or check your Gemini API plan and billing details.`
+  );
+  error.status = 429;
+  return error;
 }
 
 /**
  * Parses inline <breath>, <laugh>, <gasp>, <sigh>, <whisper>, |yeah|, |mhm| cues from the script
  * so the voice engine understands the exact emotional/breathing situation without ever speaking
- * "less than" or "greater than" aloud.
+ * "less than" or "greater than" or speaker names aloud.
+ * If a line has only a stage direction and no spoken words, returns empty cleanText ('') so it is skipped.
  */
 function sanitizeSpokenTextAndExtractCues(
   rawText: string,
   rawEmotion: string,
-  characterCustomEmotion?: string
+  characterCustomEmotion?: string,
+  speakerName?: string
 ): {
   cleanText: string;
   flashTtsText: string;
@@ -161,7 +210,17 @@ function sanitizeSpokenTextAndExtractCues(
   enhancedEmotion: string;
 } {
   const extractedCues: string[] = [];
-  const rawTextWithTags = (rawText || '').trim();
+  let rawTextWithTags = (rawText || '').trim();
+
+  // Strip any accidental leading "SpeakerName:" prefix so names are never read aloud
+  if (speakerName && speakerName.trim()) {
+    const escapedSpeaker = speakerName
+      .trim()
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const speakerPrefixRegex = new RegExp(`^${escapedSpeaker}\\s*[:：-]\\s*`, 'i');
+    rawTextWithTags = rawTextWithTags.replace(speakerPrefixRegex, '').trim();
+  }
+
   let text = rawTextWithTags;
   let flashTtsText = rawTextWithTags;
 
@@ -193,10 +252,10 @@ function sanitizeSpokenTextAndExtractCues(
     } else {
       extractedCues.push(`expressing "${cue}"`);
     }
-    return ' ... ';
+    return ' ';
   });
 
-  // Extract [...] stage directions
+  // Extract [...] and (...) stage directions if the whole line or bracket is a stage direction
   text = text.replace(/\[\s*([^\]]+)\s*\]/g, (_match, inner) => {
     extractedCues.push(String(inner).trim());
     return ' ';
@@ -212,6 +271,10 @@ function sanitizeSpokenTextAndExtractCues(
   text = text.replace(/[<>|]/g, '').replace(/\s+/g, ' ').trim();
   flashTtsText = flashTtsText.replace(/\s+/g, ' ').trim();
 
+  // Check if there are actual spoken letters/numbers in any script (including Bangla, Latin, etc.)
+  // If a line only had stage directions (e.g. "<breath>" or "[sighs]"), return empty string so it is skipped!
+  const hasSpokenWords = /[\p{L}\p{N}]/u.test(text);
+
   const enhancedEmotion = [
     characterCustomEmotion?.trim(),
     rawEmotion?.trim(),
@@ -221,19 +284,24 @@ function sanitizeSpokenTextAndExtractCues(
     .join(', ');
 
   return {
-    cleanText: text || 'Hello.',
-    flashTtsText: flashTtsText || text || 'Hello.',
+    cleanText: hasSpokenWords ? text : '',
+    flashTtsText: hasSpokenWords ? flashTtsText || text : '',
     rawTextWithTags,
     enhancedEmotion:
       enhancedEmotion || 'Natural, emotionally expressive human delivery',
   };
 }
 
+/**
+ * Splits long text into breath-aligned segments at '.', '!', '?', and Bangla '।' / '॥'.
+ */
 function splitLongTextIntoBreathSegments(text: string, maxChars = 380): string[] {
   const trimmed = text.trim();
+  if (!trimmed) return [];
   if (trimmed.length <= maxChars) return [trimmed];
 
-  const sentences = trimmed.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [trimmed];
+  const sentences =
+    trimmed.match(/[^.!?।॥]+[.!?।॥]+|\s*[^.!?।॥]+$/g) || [trimmed];
   const segments: string[] = [];
   let current = '';
 
@@ -394,246 +462,12 @@ interface SynthLineItem {
 }
 
 /**
- * Reused Single-Connection WebSocket Pool for Gemini Live Native Audio.
- * Instead of opening a new WebSocket for every line (which triggers WebSocket resets/errors),
- * this pool maintains at most ONE WebSocket per base voice (`Charon`, `Zephyr`, etc.)
- * and streams turns sequentially over that connection.
+ * Synthesizes a single spoken segment using ONLY Gemini TTS models
+ * (`gemini-3.8-flash-tts`, `gemini-3.8-flash-lite-tts`).
+ * Never switches to Live models—if TTS models hit their quota, stops and throws a clear message.
  */
-class LiveVoiceSessionPool {
-  private ai: GoogleGenAI;
-  private sessions = new Map<
-    string,
-    {
-      session: any;
-      isClosed: boolean;
-      currentChunks: Buffer[];
-      resolveTurn: ((buf: Buffer) => void) | null;
-      rejectTurn: ((err: any) => void) | null;
-      idleTimer: ReturnType<typeof setTimeout> | null;
-      hardTimer: ReturnType<typeof setTimeout> | null;
-    }
-  >();
-
-  constructor(ai: GoogleGenAI) {
-    this.ai = ai;
-  }
-
-  private async getOrCreateVoiceSession(
-    voiceName: PrebuiltBaseVoice,
-    personaPrompt: string,
-    liveModel: string
-  ) {
-    const key = `${liveModel}::${voiceName}`;
-    const existing = this.sessions.get(key);
-    if (existing && !existing.isClosed) {
-      return existing;
-    }
-
-    const state = {
-      session: null as any,
-      isClosed: false,
-      currentChunks: [] as Buffer[],
-      resolveTurn: null as ((buf: Buffer) => void) | null,
-      rejectTurn: null as ((err: any) => void) | null,
-      idleTimer: null as ReturnType<typeof setTimeout> | null,
-      hardTimer: null as ReturnType<typeof setTimeout> | null,
-    };
-
-    const completeCurrentTurn = () => {
-      if (state.idleTimer) {
-        clearTimeout(state.idleTimer);
-        state.idleTimer = null;
-      }
-      if (state.hardTimer) {
-        clearTimeout(state.hardTimer);
-        state.hardTimer = null;
-      }
-      if (state.resolveTurn) {
-        const fn = state.resolveTurn;
-        state.resolveTurn = null;
-        state.rejectTurn = null;
-        const out = Buffer.concat(state.currentChunks);
-        state.currentChunks = [];
-        fn(out);
-      }
-    };
-
-    const session = await this.ai.live.connect({
-      model: liveModel,
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName },
-          },
-        },
-        systemInstruction: {
-          parts: [
-            {
-              text: `You are a professional studio voice actor.
-Your vocal persona: ${personaPrompt}.
-STRICT RULES:
-1. Perform ONLY the exact words inside the quotation marks with the requested emotional tone and natural human breathing.
-2. Never add conversational replies, introductions, or commentary.
-3. Read the quoted line verbatim as the character.`,
-            },
-          ],
-        },
-      },
-      callbacks: {
-        onmessage: (msg: any) => {
-          const parts = msg.serverContent?.modelTurn?.parts || [];
-          for (const p of parts) {
-            if (p.inlineData?.data) {
-              state.currentChunks.push(Buffer.from(p.inlineData.data, 'base64'));
-              if (state.idleTimer) clearTimeout(state.idleTimer);
-              state.idleTimer = setTimeout(() => {
-                completeCurrentTurn();
-              }, 900);
-            }
-          }
-          if (msg.serverContent?.turnComplete) {
-            completeCurrentTurn();
-          }
-        },
-        onerror: (err: any) => {
-          state.isClosed = true;
-          if (state.currentChunks.length > 0) {
-            completeCurrentTurn();
-          } else if (state.rejectTurn) {
-            const rj = state.rejectTurn;
-            state.resolveTurn = null;
-            state.rejectTurn = null;
-            rj(new Error(err?.message || 'Live audio stream interrupted'));
-          }
-        },
-        onclose: () => {
-          state.isClosed = true;
-          if (state.currentChunks.length > 0) {
-            completeCurrentTurn();
-          } else if (state.rejectTurn) {
-            const rj = state.rejectTurn;
-            state.resolveTurn = null;
-            state.rejectTurn = null;
-            rj(new Error('Live audio connection closed early'));
-          }
-        },
-      },
-    });
-
-    state.session = session;
-    this.sessions.set(key, state);
-    return state;
-  }
-
-  async synthesizeTurn(
-    speaker: string,
-    voiceName: PrebuiltBaseVoice,
-    personaPrompt: string,
-    cleanText: string,
-    enhancedEmotion: string
-  ): Promise<Buffer> {
-    const liveModels = [
-      'gemini-3.8-live',
-      'gemini-2.5-flash-native-audio-preview-12-2025',
-    ];
-
-    for (const liveModel of liveModels) {
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const state = await this.getOrCreateVoiceSession(
-            voiceName,
-            personaPrompt,
-            liveModel
-          );
-
-          const pcm = await new Promise<Buffer>((resolve, reject) => {
-            state.currentChunks = [];
-            state.resolveTurn = resolve;
-            state.rejectTurn = reject;
-
-            state.hardTimer = setTimeout(() => {
-              if (state.currentChunks.length > 0) {
-                const out = Buffer.concat(state.currentChunks);
-                state.currentChunks = [];
-                state.resolveTurn = null;
-                state.rejectTurn = null;
-                resolve(out);
-              } else {
-                state.isClosed = true;
-                state.resolveTurn = null;
-                state.rejectTurn = null;
-                reject(new Error('Live audio turn timed out'));
-              }
-            }, 14000);
-
-            state.session.sendClientContent({
-              turns: [
-                {
-                  role: 'user',
-                  parts: [
-                    {
-                      text: `As ${speaker}, speak verbatim with ${enhancedEmotion}:\n"${cleanText}"`,
-                    },
-                  ],
-                },
-              ],
-              turnComplete: true,
-            });
-          });
-
-          if (pcm.length > 0) {
-            return pcm;
-          }
-        } catch (err: any) {
-          console.warn(
-            `LiveVoiceSessionPool (${liveModel}, attempt ${attempt}) notice:`,
-            err?.message
-          );
-          const key = `${liveModel}::${voiceName}`;
-          const broken = this.sessions.get(key);
-          if (broken) {
-            broken.isClosed = true;
-            try {
-              broken.session?.close();
-            } catch {
-              // Ignore
-            }
-            this.sessions.delete(key);
-          }
-        }
-      }
-    }
-
-    throw new Error(
-      `Audio synthesis temporarily busy for "${speaker}". Please click Generate again.`
-    );
-  }
-
-  closeAll() {
-    for (const state of this.sessions.values()) {
-      state.isClosed = true;
-      if (state.idleTimer) clearTimeout(state.idleTimer);
-      if (state.hardTimer) clearTimeout(state.hardTimer);
-      try {
-        state.session?.close();
-      } catch {
-        // Ignore close errors
-      }
-    }
-    this.sessions.clear();
-  }
-}
-
-/**
- * Synthesizes a single spoken segment using:
- * 1. Available Unary Gemini TTS models (`gemini-3.8-flash-tts`, `gemini-3.8-flash-lite-tts`, `gemini-2.5-flash-preview-tts`)
- * 2. Reused Single-Connection WebSocket Pool (`LiveVoiceSessionPool`)
- */
-async function synthesizeSegmentResilient(
+async function synthesizeSegmentTtsOnly(
   ai: GoogleGenAI,
-  livePool: LiveVoiceSessionPool,
-  speaker: string,
   voiceId: string,
   cleanText: string,
   flashTtsText: string,
@@ -644,41 +478,32 @@ async function synthesizeSegmentResilient(
   const voiceName = baseVoiceOverride || spec.primaryBase;
   const fullStyle = [spec.personaPrompt, enhancedEmotion].filter(Boolean).join('. ');
 
-  const ttsModels: (
-    | 'gemini-3.8-flash-tts'
-    | 'gemini-3.8-flash-lite-tts'
-    | 'gemini-2.5-flash-preview-tts'
-  )[] = [
+  const ttsModels: ('gemini-3.8-flash-tts' | 'gemini-3.8-flash-lite-tts')[] = [
     'gemini-3.8-flash-tts',
     'gemini-3.8-flash-lite-tts',
-    'gemini-2.5-flash-preview-tts',
   ];
 
+  let sawQuotaError = false;
+  let lastError: any = null;
+
   for (const modelName of ttsModels) {
-    if (!isModelAvailable(modelName)) continue;
-
     try {
-      const partPayload =
-        modelName === 'gemini-2.5-flash-preview-tts'
-          ? {
-              text: `Say in a ${enhancedEmotion} tone: "${cleanText}"`,
-            }
-          : {
-              text:
-                modelName === 'gemini-3.8-flash-tts'
-                  ? flashTtsText || cleanText
-                  : cleanText,
-              speechMetadata: {
-                style: fullStyle,
-              },
-            };
-
       const response = await ai.models.generateContent({
         model: modelName,
         contents: [
           {
             role: 'user',
-            parts: [partPayload],
+            parts: [
+              {
+                text:
+                  modelName === 'gemini-3.8-flash-tts'
+                    ? flashTtsText || cleanText
+                    : cleanText,
+                speechMetadata: {
+                  style: fullStyle,
+                },
+              },
+            ],
           },
         ],
         config: {
@@ -700,36 +525,45 @@ async function synthesizeSegmentResilient(
         }
       }
     } catch (err: any) {
-      recordModelQuotaError(modelName, err);
+      lastError = err;
+      if (isQuotaError(err)) {
+        sawQuotaError = true;
+      }
       console.warn(
-        `Unary TTS (${modelName}) fallback notice:`,
+        `Gemini TTS (${modelName}) error:`,
         err?.status || err?.message
       );
     }
   }
 
-  // Fallback to Reused Single-Connection WebSocket Pool
-  return livePool.synthesizeTurn(
-    speaker,
-    voiceName,
-    spec.personaPrompt,
-    cleanText,
-    enhancedEmotion
+  if (sawQuotaError) {
+    throw createClearQuotaError(lastError);
+  }
+
+  throw new Error(
+    lastError?.message || 'Gemini TTS model could not synthesize the audio line.'
   );
 }
 
 /**
- * Synthesizes a single-speaker or multi-speaker script into 24kHz 16-bit PCM.
- * Uses smart batching on unary TTS models first, and falls back to a sequential
- * reused WebSocket pool so multiple WebSockets are never opened simultaneously.
+ * Synthesizes a single-speaker, dual-speaker, or multi-speaker script into 24kHz 16-bit PCM
+ * using ONLY Gemini TTS models.
+ * - In two-speaker synthesis, sends ONLY the line text (`lineText`) without any `"Speaker:"` prefix,
+ *   because `speechMetadata.speaker` already sets the speaker.
+ * - If TTS models hit their quota, stops immediately and throws a clear quota message.
  */
 async function synthesizeMultiCharacterScript(
   ai: GoogleGenAI,
   lines: SynthLineItem[]
 ): Promise<Buffer> {
-  const validLines = lines.filter((l) => l.text && l.text.trim());
+  // Skip any line that has no actual spoken words (e.g. stage-direction-only lines)
+  const validLines = lines.filter(
+    (l) => l.text && /[\p{L}\p{N}]/u.test(l.text.trim())
+  );
   if (validLines.length === 0) {
-    throw new Error('No dialogue lines to synthesize.');
+    throw new Error(
+      'No spoken dialogue words found to synthesize (lines contained only stage directions).'
+    );
   }
 
   // Assign distinct base voices if two characters of the same gender share a primary base
@@ -755,23 +589,40 @@ async function synthesizeMultiCharacterScript(
 
   const pauseBuffer = Buffer.alloc(Math.floor(24000 * 0.18) * 2, 0);
 
-  // FAST PATH A: Single-Speaker Batching via unary `gemini-3.8-flash-tts` / `gemini-3.8-flash-lite-tts`
-  // Groups up to 8 paragraphs per unary call so a solo monologue uses minimal quota and zero WebSockets!
+  // Expand any very long single lines at '.', '!', '?', or Bangla '।'
+  const expandedLines: (SynthLineItem & { baseVoice: PrebuiltBaseVoice })[] = [];
+  for (const line of validLines) {
+    const baseVoice = speakerBaseMap.get(line.speaker.toLowerCase())!;
+    const subSegments = splitLongTextIntoBreathSegments(line.text, 380);
+    for (let idx = 0; idx < subSegments.length; idx++) {
+      const segText = subSegments[idx];
+      if (!/[\p{L}\p{N}]/u.test(segText)) continue;
+      expandedLines.push({
+        ...line,
+        text: segText,
+        flashTtsText:
+          subSegments.length === 1 ? line.flashTtsText || segText : segText,
+        baseVoice,
+      });
+    }
+  }
+
+  // PATH A: Single-Speaker Batching via unary `gemini-3.8-flash-tts` / `gemini-3.8-flash-lite-tts` (up to 10 lines per call)
   if (speakerBaseMap.size === 1) {
     const singleBase = Array.from(speakerBaseMap.values())[0];
-    const batchSize = 6;
+    const batchSize = 10;
     const batchBuffers: Buffer[] = [];
-    let allBatchesSucceeded = true;
 
-    for (let i = 0; i < validLines.length; i += batchSize) {
-      const slice = validLines.slice(i, i + batchSize);
+    for (let i = 0; i < expandedLines.length; i += batchSize) {
+      const slice = expandedLines.slice(i, i + batchSize);
       let slicePcm: Buffer | null = null;
+      let sawQuotaError = false;
+      let lastErr: any = null;
 
       for (const modelName of [
         'gemini-3.8-flash-tts',
         'gemini-3.8-flash-lite-tts',
       ] as const) {
-        if (!isModelAvailable(modelName)) continue;
         try {
           const response = await ai.models.generateContent({
             model: modelName,
@@ -815,39 +666,45 @@ async function synthesizeMultiCharacterScript(
             }
           }
         } catch (err: any) {
-          recordModelQuotaError(modelName, err);
+          lastErr = err;
+          if (isQuotaError(err)) {
+            sawQuotaError = true;
+          }
           console.warn(
-            `Single-speaker batch (${modelName}) notice:`,
+            `Single-speaker TTS (${modelName}) error:`,
             err?.status || err?.message
           );
         }
       }
 
-      if (slicePcm) {
-        batchBuffers.push(slicePcm);
-      } else {
-        allBatchesSucceeded = false;
-        break;
+      if (!slicePcm) {
+        if (sawQuotaError) {
+          throw createClearQuotaError(lastErr);
+        }
+        throw new Error(
+          lastErr?.message || 'Single-speaker TTS synthesis failed.'
+        );
       }
+
+      batchBuffers.push(slicePcm);
     }
 
-    if (allBatchesSucceeded && batchBuffers.length > 0) {
-      const joined: Buffer[] = [];
-      for (let i = 0; i < batchBuffers.length; i++) {
-        joined.push(batchBuffers[i]);
-        if (i < batchBuffers.length - 1) joined.push(pauseBuffer);
-      }
-      return Buffer.concat(joined);
+    const joined: Buffer[] = [];
+    for (let i = 0; i < batchBuffers.length; i++) {
+      joined.push(batchBuffers[i]);
+      if (i < batchBuffers.length - 1) joined.push(pauseBuffer);
     }
+    return Buffer.concat(joined);
   }
 
-  // FAST PATH B: Dual-Speaker Batching via `multiSpeakerVoiceConfig` (chunks of up to 10 lines)
+  // PATH B: Dual-Speaker Batching via `multiSpeakerVoiceConfig` (up to 10 lines per request)
+  // Sends ONLY `lineText` in `text` (NEVER `${l.speaker}: ${lineText}`) because `speechMetadata.speaker` sets the speaker!
   if (speakerBaseMap.size === 2) {
     const speakersArr = Array.from(speakerBaseMap.entries());
-    const spkAName = validLines.find(
+    const spkAName = expandedLines.find(
       (l) => l.speaker.toLowerCase() === speakersArr[0][0]
     )!.speaker;
-    const spkBName = validLines.find(
+    const spkBName = expandedLines.find(
       (l) => l.speaker.toLowerCase() === speakersArr[1][0]
     )!.speaker;
     const baseA = speakersArr[0][1];
@@ -855,17 +712,17 @@ async function synthesizeMultiCharacterScript(
 
     const chunkSize = 10;
     const chunkBuffers: Buffer[] = [];
-    let allChunksSucceeded = true;
 
-    for (let i = 0; i < validLines.length; i += chunkSize) {
-      const slice = validLines.slice(i, i + chunkSize);
+    for (let i = 0; i < expandedLines.length; i += chunkSize) {
+      const slice = expandedLines.slice(i, i + chunkSize);
       let slicePcm: Buffer | null = null;
+      let sawQuotaError = false;
+      let lastErr: any = null;
 
       for (const modelName of [
         'gemini-3.8-flash-tts',
         'gemini-3.8-flash-lite-tts',
       ] as const) {
-        if (!isModelAvailable(modelName)) continue;
         try {
           const response = await ai.models.generateContent({
             model: modelName,
@@ -882,7 +739,7 @@ async function synthesizeMultiCharacterScript(
                       ? l.flashTtsText || l.text
                       : l.text;
                   return {
-                    text: `${l.speaker}: ${lineText}`,
+                    text: lineText,
                     speechMetadata: {
                       speaker: l.speaker,
                       style: fullStyle,
@@ -920,80 +777,49 @@ async function synthesizeMultiCharacterScript(
             }
           }
         } catch (err: any) {
-          recordModelQuotaError(modelName, err);
+          lastErr = err;
+          if (isQuotaError(err)) {
+            sawQuotaError = true;
+          }
           console.warn(
-            `Dual-speaker batch (${modelName}) notice:`,
+            `Dual-speaker TTS (${modelName}) error:`,
             err?.status || err?.message
           );
         }
       }
 
-      if (slicePcm) {
-        chunkBuffers.push(slicePcm);
-      } else {
-        allChunksSucceeded = false;
-        break;
+      if (!slicePcm) {
+        if (sawQuotaError) {
+          throw createClearQuotaError(lastErr);
+        }
+        throw new Error(
+          lastErr?.message || 'Dual-speaker TTS synthesis failed.'
+        );
       }
+
+      chunkBuffers.push(slicePcm);
     }
 
-    if (allChunksSucceeded && chunkBuffers.length > 0) {
-      const joined: Buffer[] = [];
-      for (let i = 0; i < chunkBuffers.length; i++) {
-        joined.push(chunkBuffers[i]);
-        if (i < chunkBuffers.length - 1) joined.push(pauseBuffer);
-      }
-      return Buffer.concat(joined);
+    const joined: Buffer[] = [];
+    for (let i = 0; i < chunkBuffers.length; i++) {
+      joined.push(chunkBuffers[i]);
+      if (i < chunkBuffers.length - 1) joined.push(pauseBuffer);
     }
+    return Buffer.concat(joined);
   }
 
-  // FALLBACK / MULTI-SPEAKER PATH:
-  // Expand long paragraphs into breath-aligned segments and synthesize sequentially
-  // using the Reused Single-Connection WebSocket Pool (`LiveVoiceSessionPool`)
-  const expandedTasks: {
-    speaker: string;
-    voiceId: string;
-    cleanText: string;
-    flashTtsText: string;
-    emotion: string;
-    baseVoice?: PrebuiltBaseVoice;
-  }[] = [];
-
-  for (const line of validLines) {
-    const baseVoice = speakerBaseMap.get(line.speaker.toLowerCase());
-    const subSegments = splitLongTextIntoBreathSegments(line.text, 380);
-    for (let idx = 0; idx < subSegments.length; idx++) {
-      const segText = subSegments[idx];
-      expandedTasks.push({
-        speaker: line.speaker,
-        voiceId: line.voiceId,
-        cleanText: segText,
-        flashTtsText:
-          subSegments.length === 1 ? line.flashTtsText || segText : segText,
-        emotion: line.emotion,
-        baseVoice,
-      });
-    }
-  }
-
-  const livePool = new LiveVoiceSessionPool(ai);
+  // PATH C: Multi-Speaker (3+ speakers) using TTS models only
   const segmentBuffers: Buffer[] = [];
-
-  try {
-    for (const task of expandedTasks) {
-      const buf = await synthesizeSegmentResilient(
-        ai,
-        livePool,
-        task.speaker,
-        task.voiceId,
-        task.cleanText,
-        task.flashTtsText,
-        task.emotion,
-        task.baseVoice
-      );
-      segmentBuffers.push(buf);
-    }
-  } finally {
-    livePool.closeAll();
+  for (const task of expandedLines) {
+    const buf = await synthesizeSegmentTtsOnly(
+      ai,
+      task.voiceId,
+      task.text,
+      task.flashTtsText || task.text,
+      task.emotion,
+      task.baseVoice
+    );
+    segmentBuffers.push(buf);
   }
 
   const finalSegments: Buffer[] = [];
@@ -1053,10 +879,9 @@ async function generateTextWithFallback(
  */
 app.post('/api/tts/audition', async (req, res) => {
   const ai = getGeminiClient();
-  const livePool = new LiveVoiceSessionPool(ai);
   try {
     const {
-      voiceId = 'Akid',
+      voiceId = 'Achird',
       characterName,
       sampleText,
       customEmotion = '',
@@ -1070,9 +895,10 @@ app.post('/api/tts/audition', async (req, res) => {
       sanitizeSpokenTextAndExtractCues(
         rawText,
         'Warm, expressive, natural human emotion',
-        customEmotion
+        customEmotion,
+        characterName
       );
-    const cacheKey = `v5::${voiceId}::${enhancedEmotion}::${cleanText}`;
+    const cacheKey = `v6::${voiceId}::${enhancedEmotion}::${cleanText}`;
 
     if (auditionMp3Cache.has(cacheKey)) {
       return res.json({
@@ -1081,10 +907,8 @@ app.post('/api/tts/audition', async (req, res) => {
       });
     }
 
-    const pcm = await synthesizeSegmentResilient(
+    const pcm = await synthesizeSegmentTtsOnly(
       ai,
-      livePool,
-      characterName || voiceId,
       voiceId,
       cleanText,
       flashTtsText,
@@ -1102,11 +926,10 @@ app.post('/api/tts/audition', async (req, res) => {
     });
   } catch (error: any) {
     console.error('Audition error:', error);
+    const statusCode = error?.status === 429 ? 429 : 500;
     res
-      .status(500)
+      .status(statusCode)
       .json({ error: error?.message || 'Could not preview voice.' });
-  } finally {
-    livePool.closeAll();
   }
 });
 
@@ -1123,12 +946,12 @@ app.post('/api/session/generate-prompt', async (req, res) => {
         ? cast
             .map(
               (c: any) =>
-                `${c.name} (${c.gender}${
+                `${c.name} (${c.gender}, Gemini Voice: ${c.voiceId}${
                   c.customEmotion ? `, emotion: ${c.customEmotion}` : ''
                 })`
             )
             .join(', ')
-        : 'Raf (male) and Rain (female)';
+        : 'Raf (male, Achird) and Rain (female, Autonoe)';
 
     const modeDesc =
       talkingMode === 'single'
@@ -1148,7 +971,7 @@ Include:
 3. The specific emotional arc and natural inline cues like <breath>, <sigh>, or <laugh>.
 ${
   seedIdea?.trim()
-    ? `Base it on this user idea: "${seedIdea.trim()}"`
+    ? `Base it on this user idea (preserve the language if written in Bangla or another language): "${seedIdea.trim()}"`
     : 'Make it atmospheric, cinematic, and emotionally engaging.'
 }
 Return ONLY the plain text prompt ready to use in a prompt box, with no quotes or markdown prefixes.`
@@ -1170,6 +993,7 @@ Return ONLY the plain text prompt ready to use in a prompt box, with no quotes o
 
 /**
  * Helper to generate or parse structured script lines from the user's prompt.
+ * Preserves user-written dialogue 100% verbatim in its original language (including Bangla).
  */
 async function generateStructuredScriptFromPrompt(
   ai: GoogleGenAI,
@@ -1192,47 +1016,98 @@ async function generateStructuredScriptFromPrompt(
             id: 'char-raf',
             name: 'Raf',
             gender: 'male',
-            voiceId: 'Akid',
+            voiceId: 'Achird',
             customEmotion: '',
           },
           {
             id: 'char-rain',
             name: 'Rain',
             gender: 'female',
-            voiceId: 'Zephyr',
+            voiceId: 'Autonoe',
             customEmotion: '',
           },
         ];
 
-  const castListDescription = activeCast
-    .map(
-      (c, idx) =>
-        `Character ${idx + 1}: "${c.name}" (${c.gender}, TTS Voice: ${
-          c.voiceId
-        }, User-Specified Emotional Style: "${
-          c.customEmotion?.trim() || 'Natural expressive delivery'
-        }")`
-    )
-    .join('\n');
-
-  const modeInstruction =
-    talkingMode === 'single'
-      ? `SINGLE-SPEAKER MODE: Only "${
-          activeCast[0]?.name || 'Raf'
-        }" speaks in this scene (a solo monologue, narration, or story). Break long speeches into natural paragraph-sized spoken turns so pacing and breathing flow organically.`
-      : talkingMode === 'multi'
-      ? `MULTI-SPEAKER MODE: Include all configured characters (${activeCast
-          .map((c) => c.name)
-          .join(', ')}) or any characters named in the user's prompt.`
-      : `DUAL-SPEAKER MODE: A conversation between ${activeCast
-          .slice(0, 2)
-          .map((c) => c.name)
-          .join(' and ')} (unless the user explicitly names different characters).`;
-
   const isRevision = Array.isArray(previousScript) && previousScript.length > 0;
 
-  const systemContext = isRevision
-    ? `You are the script director for "Rain sound", a minimalist voice production studio.
+  // Direct Verbatim Parser when the user provides a script formatted with "Speaker: Dialogue"
+  // (e.g., "Raf: কেমন আছো রেইন?" or "Rain: <breath> I am here.") and is not revising a previous script.
+  // This guarantees 0% modification of Bangla or any language and 0ms latency!
+  const rawInputLines = userPrompt
+    .split(/\r?\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const speakerColonRegex = /^([^:：]{1,32})[:：]\s*(.+)$/;
+  const colonLineMatches = rawInputLines.filter((l) => speakerColonRegex.test(l));
+
+  let parsed: any = null;
+
+  if (
+    !isRevision &&
+    rawInputLines.length > 0 &&
+    colonLineMatches.length >= Math.ceil(rawInputLines.length * 0.6)
+  ) {
+    const directLines: { speaker: string; emotion: string; text: string }[] = [];
+    for (const rawLine of rawInputLines) {
+      const m = rawLine.match(speakerColonRegex);
+      if (m) {
+        const spkName = m[1].trim();
+        const spokenPart = m[2].trim();
+        const castMatch = activeCast.find(
+          (c) => c.name.toLowerCase() === spkName.toLowerCase()
+        );
+        directLines.push({
+          speaker: castMatch ? castMatch.name : spkName,
+          emotion: castMatch?.customEmotion || 'Natural expressive delivery',
+          text: spokenPart,
+        });
+      } else if (directLines.length > 0) {
+        directLines[directLines.length - 1].text += ` ${rawLine}`;
+      } else {
+        const firstMember = activeCast[0];
+        directLines.push({
+          speaker: firstMember.name,
+          emotion: firstMember.customEmotion || 'Natural expressive delivery',
+          text: rawLine,
+        });
+      }
+    }
+
+    parsed = {
+      sceneTitle: `${activeCast.map((c) => c.name).join(' & ')} Scene`,
+      environmentNote: 'Verbatim Script Recording',
+      detectedCast: activeCast,
+      lines: directLines,
+    };
+  } else {
+    const castListDescription = activeCast
+      .map(
+        (c, idx) =>
+          `Character ${idx + 1}: "${c.name}" (${c.gender}, Gemini Voice: ${
+            c.voiceId
+          }, User-Specified Emotional Style: "${
+            c.customEmotion?.trim() || 'Natural expressive delivery'
+          }")`
+      )
+      .join('\n');
+
+    const modeInstruction =
+      talkingMode === 'single'
+        ? `SINGLE-SPEAKER MODE: Only "${
+            activeCast[0]?.name || 'Raf'
+          }" speaks in this scene (a solo monologue, narration, or story). Break long speeches into natural paragraph-sized spoken turns so pacing and breathing flow organically.`
+        : talkingMode === 'multi'
+        ? `MULTI-SPEAKER MODE: Include all configured characters (${activeCast
+            .map((c) => c.name)
+            .join(', ')}) or any characters named in the user's prompt.`
+        : `DUAL-SPEAKER MODE: A conversation between ${activeCast
+            .slice(0, 2)
+            .map((c) => c.name)
+            .join(' and ')} (unless the user explicitly names different characters).`;
+
+    const systemContext = isRevision
+      ? `You are the script director for "Rain sound", a minimalist voice production studio.
 ${modeInstruction}
 Current Cast & Their Emotional Personas:
 ${castListDescription}
@@ -1245,10 +1120,11 @@ The user has listened to the audio and provided this re-prompt / fix request:
 
 Revise or rewrite the script to fulfill the user's exact request.
 CRITICAL RULES:
-- Honor each character's User-Specified Emotional Style and any inline tags like <breath>, <sigh>, <laugh>, <gasp>, or <whisper> that the user included.
-- If the user wrote or requested a long script, preserve or generate the requested length.
-- You may include inline cues like <breath>, <sigh>, <laugh>, <gasp>, <whisper> in "text" where appropriate.`
-    : `You are the script director for "Rain sound", a minimalist voice production studio.
+- VERBATIM & LANGUAGE PRESERVATION: Keep all user-written dialogue in its exact original language and script (including Bangla / বাংলা, English, or mixed text). Never translate Bangla into English or rewrite user-written words unless explicitly asked.
+- NEVER include the speaker's name inside the "text" field (only put the spoken words in "text").
+- If a line has only a stage direction and no spoken words, fold that direction into the adjacent line's "emotion" field rather than creating an empty line.
+- Honor each character's User-Specified Emotional Style and any inline tags like <breath>, <sigh>, <laugh>, <gasp>, or <whisper>.`
+      : `You are the script director for "Rain sound", a minimalist voice production studio.
 ${modeInstruction}
 Current Cast & Their Emotional Personas:
 ${castListDescription}
@@ -1258,101 +1134,98 @@ The user has provided the theme, environment, emotions, inline <breath> cues, or
 
 Write or format the spoken script based on the user's input.
 CRITICAL RULES:
-- If the user pasted a full script or monologue, preserve all of their spoken text faithfully without shortening it.
-- If the user described a theme/environment/situation, write a natural, emotionally rich script matching the requested mode (${talkingMode}).
-- Honor each character's User-Specified Emotional Style in the "emotion" field of every line they speak.
-- You may preserve or include natural inline cues like <breath>, <sigh>, <laugh>, <gasp>, <whisper> in the "text" field to mark emotional moments.`;
+- VERBATIM & LANGUAGE PRESERVATION: If the user wrote dialogue or monologue text (in Bangla / বাংলা, English, or any language), keep their exact written dialogue 100% verbatim in its original language and script without translating, shortening, or paraphrasing it. Preserve Bangla punctuation like "।" exactly.
+- If the user described a theme/environment/situation instead of dialogue, write a natural, emotionally rich script in the language requested by the user matching the mode (${talkingMode}).
+- NEVER include the speaker's name prefix (e.g. "Raf:") inside the "text" field—put the speaker name only in "speaker" and only the spoken words in "text".
+- Do NOT create lines that contain only stage directions with no spoken words.
+- Honor each character's User-Specified Emotional Style in the "emotion" field of every line they speak.`;
 
-  let parsed: any = null;
-  try {
-    const jsonText = await generateTextWithFallback(ai, systemContext, {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          sceneTitle: {
-            type: Type.STRING,
-            description: 'Short poetic title for this scene.',
-          },
-          environmentNote: {
-            type: Type.STRING,
-            description: '1-line summary of the environment & mood.',
-          },
-          detectedCast: {
-            type: Type.ARRAY,
-            description:
-              'The characters speaking in this scene and their assigned voices.',
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING },
-                gender: { type: Type.STRING, description: '"male" or "female"' },
-                voiceId: {
-                  type: Type.STRING,
-                  description:
-                    'One of: Akid, Remy, Charon, Fenrir, Puck, Zephyr, Fola, Kore, Aria, Sora',
+    try {
+      const jsonText = await generateTextWithFallback(ai, systemContext, {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            sceneTitle: {
+              type: Type.STRING,
+              description: 'Short poetic title for this scene.',
+            },
+            environmentNote: {
+              type: Type.STRING,
+              description: '1-line summary of the environment & mood.',
+            },
+            detectedCast: {
+              type: Type.ARRAY,
+              description:
+                'The characters speaking in this scene and their assigned voices.',
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  gender: { type: Type.STRING, description: '"male" or "female"' },
+                  voiceId: {
+                    type: Type.STRING,
+                    description:
+                      'One of: Achird, Charon, Fenrir, Puck, Orus, Autonoe, Zephyr, Kore, Aoede, Leda',
+                  },
                 },
+                required: ['name', 'gender', 'voiceId'],
               },
-              required: ['name', 'gender', 'voiceId'],
+            },
+            lines: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  speaker: {
+                    type: Type.STRING,
+                    description: 'Character name speaking this line.',
+                  },
+                  emotion: {
+                    type: Type.STRING,
+                    description: 'Rich emotional acting direction for this line.',
+                  },
+                  text: {
+                    type: Type.STRING,
+                    description:
+                      'Spoken dialogue words only (never include speaker name prefix; may contain <breath>, <sigh>, <laugh>, <gasp>, <whisper> cues).',
+                  },
+                },
+                required: ['speaker', 'emotion', 'text'],
+              },
             },
           },
-          lines: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                speaker: {
-                  type: Type.STRING,
-                  description: 'Character name speaking this line.',
-                },
-                emotion: {
-                  type: Type.STRING,
-                  description: 'Rich emotional acting direction for this line.',
-                },
-                text: {
-                  type: Type.STRING,
-                  description:
-                    'Spoken dialogue words (may contain <breath>, <sigh>, <laugh>, <gasp>, <whisper> cues).',
-                },
-              },
-              required: ['speaker', 'emotion', 'text'],
-            },
-          },
+          required: ['sceneTitle', 'environmentNote', 'detectedCast', 'lines'],
         },
-        required: ['sceneTitle', 'environmentNote', 'detectedCast', 'lines'],
-      },
-    });
-    parsed = JSON.parse(jsonText.trim() || '{}');
-  } catch (parseErr) {
-    console.warn('Direct script parser fallback activated:', parseErr);
-    const rawParagraphs = userPrompt
-      .split(/\r?\n+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    parsed = {
-      sceneTitle: `${activeCast.map((c) => c.name).join(' & ')} Scene`,
-      environmentNote: 'Studio Recording',
-      detectedCast: activeCast,
-      lines: rawParagraphs.map((p, idx) => {
-        const colonMatch = p.match(/^([^:]{1,28}):\s*(.+)$/);
-        if (colonMatch && talkingMode !== 'single') {
+      });
+      parsed = JSON.parse(jsonText.trim() || '{}');
+    } catch (parseErr) {
+      console.warn('Direct script parser fallback activated:', parseErr);
+      parsed = {
+        sceneTitle: `${activeCast.map((c) => c.name).join(' & ')} Scene`,
+        environmentNote: 'Studio Recording',
+        detectedCast: activeCast,
+        lines: rawInputLines.map((p, idx) => {
+          const colonMatch = p.match(speakerColonRegex);
+          if (colonMatch && talkingMode !== 'single') {
+            return {
+              speaker: colonMatch[1].trim(),
+              emotion: 'Expressive studio delivery',
+              text: colonMatch[2].trim(),
+            };
+          }
+          const member =
+            talkingMode === 'single'
+              ? activeCast[0]
+              : activeCast[idx % activeCast.length];
           return {
-            speaker: colonMatch[1].trim(),
-            emotion: 'Expressive studio delivery',
-            text: colonMatch[2].trim(),
+            speaker: member.name,
+            emotion: member.customEmotion || 'Expressive studio delivery',
+            text: p,
           };
-        }
-        const member =
-          talkingMode === 'single'
-            ? activeCast[0]
-            : activeCast[idx % activeCast.length];
-        return {
-          speaker: member.name,
-          emotion: member.customEmotion || 'Expressive studio delivery',
-          text: p,
-        };
-      }),
-    };
+        }),
+      };
+    }
   }
 
   // Merge user's configured cast with any prompt-detected characters
@@ -1385,10 +1258,10 @@ CRITICAL RULES:
           String(dc.gender || '').toLowerCase() === 'female' ? 'female' : 'male';
         const spec = getVoiceSpec(dc.voiceId, gender);
         const validVoiceId = VOICE_CHARACTER_MAP[dc.voiceId]
-          ? dc.voiceId
+          ? VOICE_CHARACTER_MAP[dc.voiceId].primaryBase
           : gender === 'female'
-          ? 'Zephyr'
-          : 'Akid';
+          ? 'Autonoe'
+          : 'Achird';
         resolvedCastMap.set(key, {
           id: `char-${Date.now()}-${idx}`,
           name: String(dc.name).trim(),
@@ -1402,6 +1275,7 @@ CRITICAL RULES:
 
   const finalCastList = Array.from(resolvedCastMap.values());
 
+  // Normalize lines and skip any line that has only a stage direction and no spoken words!
   const normalizedLines: SynthLineItem[] = (parsed.lines || [])
     .map((l: any, idx: number) => {
       const rawSpeaker = String(l.speaker || '').trim();
@@ -1415,7 +1289,8 @@ CRITICAL RULES:
         sanitizeSpokenTextAndExtractCues(
           String(l.text || ''),
           String(l.emotion || 'Natural, expressive delivery'),
-          matchedMember.customEmotion
+          matchedMember.customEmotion,
+          matchedMember.name
         );
 
       return {
@@ -1427,10 +1302,15 @@ CRITICAL RULES:
         rawTextWithTags,
       };
     })
-    .filter((l: SynthLineItem) => l.text.length > 0 && l.text !== '...');
+    .filter(
+      (l: SynthLineItem) =>
+        Boolean(l.text) && /[\p{L}\p{N}]/u.test(l.text.trim())
+    );
 
   if (normalizedLines.length === 0) {
-    throw new Error('Could not generate script lines from the prompt.');
+    throw new Error(
+      'No spoken words found in the script (lines contained only stage directions).'
+    );
   }
 
   return {
@@ -1443,8 +1323,6 @@ CRITICAL RULES:
 
 /**
  * POST /api/session/script
- * Step 1 of progressive studio rendering: generates or revises the structured script
- * so the UI can display progress and synthesize long scripts in reliable chunks.
  */
 app.post('/api/session/script', async (req, res) => {
   try {
@@ -1493,8 +1371,7 @@ app.post('/api/session/script', async (req, res) => {
 
 /**
  * POST /api/session/synthesize-chunk
- * Synthesizes a batch of lines and returns raw 24kHz 16-bit PCM base64,
- * allowing long 2-10 minute scripts to be synthesized with live progress and zero timeouts.
+ * Synthesizes up to 10 lines per request and returns raw 24kHz 16-bit PCM base64.
  */
 app.post('/api/session/synthesize-chunk', async (req, res) => {
   try {
@@ -1513,24 +1390,34 @@ app.post('/api/session/synthesize-chunk', async (req, res) => {
       }
     }
 
-    const synthLines: SynthLineItem[] = lines.map((l: any) => {
-      const charInfo = castMap.get(String(l.speaker || '').toLowerCase());
-      const sourceText = String(l.rawTextWithTags ?? l.text ?? '');
-      const { cleanText, flashTtsText, rawTextWithTags, enhancedEmotion } =
-        sanitizeSpokenTextAndExtractCues(
-          sourceText,
-          String(l.emotion || 'Natural emotional delivery'),
-          charInfo?.customEmotion
-        );
-      return {
-        speaker: l.speaker,
-        voiceId: charInfo?.voiceId || l.voiceId || 'Akid',
-        emotion: enhancedEmotion,
-        text: cleanText,
-        flashTtsText,
-        rawTextWithTags,
-      };
-    });
+    const synthLines: SynthLineItem[] = lines
+      .map((l: any) => {
+        const charInfo = castMap.get(String(l.speaker || '').toLowerCase());
+        const sourceText = String(l.rawTextWithTags ?? l.text ?? '');
+        const { cleanText, flashTtsText, rawTextWithTags, enhancedEmotion } =
+          sanitizeSpokenTextAndExtractCues(
+            sourceText,
+            String(l.emotion || 'Natural emotional delivery'),
+            charInfo?.customEmotion,
+            String(l.speaker || '')
+          );
+        return {
+          speaker: l.speaker,
+          voiceId: charInfo?.voiceId || l.voiceId || 'Achird',
+          emotion: enhancedEmotion,
+          text: cleanText,
+          flashTtsText,
+          rawTextWithTags,
+        };
+      })
+      .filter(
+        (l: SynthLineItem) =>
+          Boolean(l.text) && /[\p{L}\p{N}]/u.test(l.text.trim())
+      );
+
+    if (synthLines.length === 0) {
+      return res.json({ pcmBase64: '' });
+    }
 
     const ai = getGeminiClient();
     const chunkPcm = await synthesizeMultiCharacterScript(ai, synthLines);
@@ -1540,7 +1427,8 @@ app.post('/api/session/synthesize-chunk', async (req, res) => {
     });
   } catch (error: any) {
     console.error('Synthesize chunk error:', error);
-    res.status(500).json({
+    const statusCode = error?.status === 429 ? 429 : 500;
+    res.status(statusCode).json({
       error: error?.message || 'Failed to synthesize audio chunk.',
     });
   }
@@ -1553,18 +1441,22 @@ app.post('/api/session/synthesize-chunk', async (req, res) => {
 app.post('/api/session/finalize-audio', async (req, res) => {
   try {
     const { pcmChunksBase64 = [] } = req.body;
-    if (!Array.isArray(pcmChunksBase64) || pcmChunksBase64.length === 0) {
+    const nonEmptyChunks = Array.isArray(pcmChunksBase64)
+      ? pcmChunksBase64.filter((c: any) => typeof c === 'string' && c.length > 0)
+      : [];
+
+    if (nonEmptyChunks.length === 0) {
       return res.status(400).json({ error: 'No audio chunks to finalize.' });
     }
 
     const pauseBuffer = Buffer.alloc(Math.floor(24000 * 0.18) * 2, 0);
     const buffers: Buffer[] = [];
 
-    for (let i = 0; i < pcmChunksBase64.length; i++) {
-      const buf = Buffer.from(pcmChunksBase64[i], 'base64');
+    for (let i = 0; i < nonEmptyChunks.length; i++) {
+      const buf = Buffer.from(nonEmptyChunks[i], 'base64');
       if (buf.length > 0) {
         buffers.push(buf);
-        if (i < pcmChunksBase64.length - 1) {
+        if (i < nonEmptyChunks.length - 1) {
           buffers.push(pauseBuffer);
         }
       }
@@ -1593,7 +1485,7 @@ app.post('/api/session/finalize-audio', async (req, res) => {
 
 /**
  * POST /api/session/turn
- * Full single-request script + audio endpoint (kept for direct API compatibility).
+ * Full single-request script + audio endpoint.
  */
 app.post('/api/session/turn', async (req, res) => {
   try {
@@ -1644,7 +1536,8 @@ app.post('/api/session/turn', async (req, res) => {
     });
   } catch (error: any) {
     console.error('Session turn error:', error);
-    res.status(500).json({
+    const statusCode = error?.status === 429 ? 429 : 500;
+    res.status(statusCode).json({
       error: error?.message || 'Failed to generate script and audio.',
     });
   }
@@ -1652,7 +1545,6 @@ app.post('/api/session/turn', async (req, res) => {
 
 /**
  * POST /api/session/resynthesize
- * Re-renders the MP3 & WAV directly when the user manually edits lines or character emotions.
  */
 app.post('/api/session/resynthesize', async (req, res) => {
   try {
@@ -1671,24 +1563,36 @@ app.post('/api/session/resynthesize', async (req, res) => {
       }
     }
 
-    const synthLines: SynthLineItem[] = lines.map((l: any) => {
-      const charInfo = castMap.get(String(l.speaker || '').toLowerCase());
-      const sourceText = String(l.rawTextWithTags ?? l.text ?? '');
-      const { cleanText, flashTtsText, rawTextWithTags, enhancedEmotion } =
-        sanitizeSpokenTextAndExtractCues(
-          sourceText,
-          String(l.emotion || 'Natural emotional delivery'),
-          charInfo?.customEmotion
-        );
-      return {
-        speaker: l.speaker,
-        voiceId: charInfo?.voiceId || l.voiceId || 'Akid',
-        emotion: enhancedEmotion,
-        text: cleanText,
-        flashTtsText,
-        rawTextWithTags,
-      };
-    });
+    const synthLines: SynthLineItem[] = lines
+      .map((l: any) => {
+        const charInfo = castMap.get(String(l.speaker || '').toLowerCase());
+        const sourceText = String(l.rawTextWithTags ?? l.text ?? '');
+        const { cleanText, flashTtsText, rawTextWithTags, enhancedEmotion } =
+          sanitizeSpokenTextAndExtractCues(
+            sourceText,
+            String(l.emotion || 'Natural emotional delivery'),
+            charInfo?.customEmotion,
+            String(l.speaker || '')
+          );
+        return {
+          speaker: l.speaker,
+          voiceId: charInfo?.voiceId || l.voiceId || 'Achird',
+          emotion: enhancedEmotion,
+          text: cleanText,
+          flashTtsText,
+          rawTextWithTags,
+        };
+      })
+      .filter(
+        (l: SynthLineItem) =>
+          Boolean(l.text) && /[\p{L}\p{N}]/u.test(l.text.trim())
+      );
+
+    if (synthLines.length === 0) {
+      return res.status(400).json({
+        error: 'No spoken words found to synthesize after removing stage directions.',
+      });
+    }
 
     const ai = getGeminiClient();
     const fullPcm = await synthesizeMultiCharacterScript(ai, synthLines);
@@ -1714,7 +1618,8 @@ app.post('/api/session/resynthesize', async (req, res) => {
     });
   } catch (error: any) {
     console.error('Resynthesize error:', error);
-    res.status(500).json({
+    const statusCode = error?.status === 429 ? 429 : 500;
+    res.status(statusCode).json({
       error: error?.message || 'Failed to re-synthesize audio.',
     });
   }

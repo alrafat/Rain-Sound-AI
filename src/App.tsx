@@ -39,8 +39,23 @@ import {
   VOICE_CHARACTERS,
 } from './constants';
 
-const SCENES_STORAGE_KEY = 'rain_sound_scenes_v3';
-const CHARS_STORAGE_KEY = 'rain_sound_saved_chars_v3';
+const SCENES_STORAGE_KEY = 'rain_sound_scenes_v4';
+const CHARS_STORAGE_KEY = 'rain_sound_saved_chars_v4';
+
+function normalizeVoiceId(rawVoiceId: any, gender: VoiceGender): any {
+  const legacyMap: Record<string, string> = {
+    Akid: 'Achird',
+    Remy: 'Puck',
+    Fola: 'Autonoe',
+    Aria: 'Aoede',
+    Sora: 'Leda',
+  };
+  const mapped = legacyMap[String(rawVoiceId || '')] || String(rawVoiceId || '');
+  if (VOICE_CHARACTERS.some((v) => v.id === mapped)) {
+    return mapped;
+  }
+  return gender === 'female' ? 'Autonoe' : 'Achird';
+}
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
@@ -212,15 +227,21 @@ export default function App() {
                 : 'dual',
             createdAt: s.createdAt || 'Just now',
             updatedAt: s.updatedAt || 'Just now',
-            cast: Array.isArray(s.cast) && s.cast.length > 0
-              ? s.cast.map((c: any, cIdx: number) => ({
-                  id: c.id || `char-${cIdx + 1}`,
-                  name: c.name || `Character ${cIdx + 1}`,
-                  gender: c.gender === 'female' ? 'female' : 'male',
-                  voiceId: c.voiceId || (c.gender === 'female' ? 'Zephyr' : 'Akid'),
-                  customEmotion: typeof c.customEmotion === 'string' ? c.customEmotion : '',
-                }))
-              : buildInitialCastForMode('dual'),
+            cast:
+              Array.isArray(s.cast) && s.cast.length > 0
+                ? s.cast.map((c: any, cIdx: number) => {
+                    const g: VoiceGender =
+                      c.gender === 'female' ? 'female' : 'male';
+                    return {
+                      id: c.id || `char-${cIdx + 1}`,
+                      name: c.name || `Character ${cIdx + 1}`,
+                      gender: g,
+                      voiceId: normalizeVoiceId(c.voiceId, g),
+                      customEmotion:
+                        typeof c.customEmotion === 'string' ? c.customEmotion : '',
+                    };
+                  })
+                : buildInitialCastForMode('dual'),
             turns: Array.isArray(s.turns)
               ? s.turns.map((t: any, tIdx: number) => ({
                   ...t,
@@ -251,7 +272,14 @@ export default function App() {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.map((p: any) => {
+            const g: VoiceGender = p.gender === 'female' ? 'female' : 'male';
+            return {
+              ...p,
+              gender: g,
+              voiceId: normalizeVoiceId(p.voiceId, g),
+            };
+          });
         }
       }
     } catch {
@@ -262,17 +290,31 @@ export default function App() {
 
   const [activeSceneId, setActiveSceneId] = useState<string>(() => scenes[0]?.id || '');
   const [statusToast, setStatusToast] = useState<string | null>(null);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
   const activeScene = scenes.find((s) => s.id === activeSceneId) || scenes[0];
 
   useEffect(() => {
     try {
       localStorage.setItem(SCENES_STORAGE_KEY, JSON.stringify(scenes));
+      setStorageWarning(null);
     } catch {
+      setStorageWarning(
+        'Browser storage is full: Your latest audio is ready to play and download right now, but older audio files cannot fit in browser storage. Please download your MP3/WAV files or delete older scenes from Saved Scenes.'
+      );
       try {
-        localStorage.setItem(SCENES_STORAGE_KEY, JSON.stringify(scenes.slice(0, 4)));
+        // Save scenes with script metadata intact while keeping only the latest scene's audio payload
+        const compactScenes = scenes.map((s, sIdx) => ({
+          ...s,
+          turns: s.turns.map((t, tIdx) =>
+            sIdx === 0 && tIdx === s.turns.length - 1
+              ? { ...t, wavBase64: '' }
+              : { ...t, mp3Base64: '', wavBase64: '' }
+          ),
+        }));
+        localStorage.setItem(SCENES_STORAGE_KEY, JSON.stringify(compactScenes));
       } catch {
-        // Ignore quota limits
+        // Even compact storage exceeded browser quota; warning banner is already active
       }
     }
   }, [scenes]);
@@ -281,7 +323,9 @@ export default function App() {
     try {
       localStorage.setItem(CHARS_STORAGE_KEY, JSON.stringify(savedCharacters));
     } catch {
-      // Ignore
+      setStorageWarning(
+        'Browser storage is full: Could not persist character presets to localStorage.'
+      );
     }
   }, [savedCharacters]);
 
@@ -659,13 +703,13 @@ export default function App() {
     'Rendering Expressive Audio (MP3 & WAV)...'
   );
 
-  // Helper to synthesize any array of script lines in safe chunks and return final WAV + MP3
+  // Helper to synthesize any array of script lines in safe chunks of up to 10 lines and return final WAV + MP3
   const synthesizeLinesInChunks = async (
     linesToRender: DialogueLine[],
     castToUse: CastMember[],
     onProgress?: (msg: string) => void
   ) => {
-    const chunkSize = 4;
+    const chunkSize = 10;
     const totalChunks = Math.max(1, Math.ceil(linesToRender.length / chunkSize));
     const pcmChunksBase64: string[] = [];
 
@@ -1251,6 +1295,22 @@ export default function App() {
             </div>
           )}
 
+          {/* Browser Storage Full Warning Banner */}
+          {storageWarning && (
+            <div className="p-4 rounded-xl bg-[#EFECE3] border border-[#111110] flex items-center justify-between gap-4 text-xs sm:text-sm">
+              <div className="flex items-center gap-2.5">
+                <AlertCircle className="w-4 h-4 text-[#D92B2B] shrink-0" />
+                <span>{storageWarning}</span>
+              </div>
+              <button
+                onClick={() => setStorageWarning(null)}
+                className="text-xs font-semibold underline shrink-0 cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {/* Studio Top Control Bar: Talking Mode Selector (Single | Dual | Multi) */}
           <section className="p-5 rounded-2xl bg-[#EFECE3] border border-[#111110]/15 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
@@ -1396,9 +1456,12 @@ export default function App() {
                     <div className="space-y-2.5">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium text-[#6E6C65]">
-                          {member.gender === 'male' ? 'Male Voices' : 'Female Voices'} ·{' '}
+                          {member.gender === 'male'
+                            ? 'Gemini Male Voices'
+                            : 'Gemini Female Voices'}{' '}
+                          ·{' '}
                           <span className="text-[#111110] font-semibold">
-                            {selectedVoiceMeta.name}
+                            {selectedVoiceMeta.geminiVoiceName}
                           </span>
                         </span>
 
@@ -1500,17 +1563,26 @@ export default function App() {
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
                         <button
                           onClick={() => handleDownload(turn, 'mp3')}
-                          className="px-4 py-2.5 text-xs font-semibold bg-[#111110] text-[#F7F5EE] hover:bg-[#2A2A28] rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
+                          disabled={!turn.mp3Base64}
+                          className="px-4 py-2.5 text-xs font-semibold bg-[#111110] text-[#F7F5EE] hover:bg-[#2A2A28] disabled:opacity-40 rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
                         >
                           <Download className="w-4 h-4" />
                           <span>Download MP3</span>
                         </button>
                         <button
                           onClick={() => handleDownload(turn, 'wav')}
-                          className="px-4 py-2.5 text-xs font-semibold bg-[#F7F5EE] text-[#111110] border border-[#111110]/25 hover:bg-[#111110] hover:text-[#F7F5EE] rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
+                          disabled={!turn.wavBase64 && !turn.mp3Base64}
+                          className="px-4 py-2.5 text-xs font-semibold bg-[#F7F5EE] text-[#111110] border border-[#111110]/25 hover:bg-[#111110] hover:text-[#F7F5EE] disabled:opacity-40 rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
                         >
                           <Download className="w-4 h-4" />
                           <span>Download WAV</span>
+                        </button>
+                        <button
+                          onClick={() => handleStartNewScene(talkingMode)}
+                          className="px-4 py-2.5 text-xs font-semibold bg-[#F7F5EE] text-[#111110] border border-[#111110]/25 hover:bg-[#111110] hover:text-[#F7F5EE] rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Start New Scene</span>
                         </button>
                       </div>
                     </div>
